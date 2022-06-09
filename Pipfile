@@ -10,6 +10,7 @@ geopandas = "*"
 streamlit = "*"
 streamlit-folium = "*"
 tk = "*"
+fiona = "*"
 
 [dev-packages]
 

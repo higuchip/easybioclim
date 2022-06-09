@@ -9,6 +9,7 @@ geemap = "*"
 geopandas = "*"
 streamlit = "*"
 streamlit-folium = "*"
+tk = "*"
 
 [dev-packages]
 

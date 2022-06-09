@@ -8,6 +8,7 @@ from streamlit_folium import folium_static
 import ee
 import pandas as pd
 
+from io import StringIO 
 
 collections.Callable = collections.abc.Callable
 

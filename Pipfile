@@ -6,6 +6,7 @@ name = "pypi"
 [packages]
 ee = "*"
 geemap = "*"
+geopandas = "*"
 streamlit = "*"
 streamlit-folium = "*"
 

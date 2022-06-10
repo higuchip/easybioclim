@@ -1,5 +1,4 @@
 import collections
-import folium
 import geopandas as gpd
 import geemap.foliumap as geemap
 import json
@@ -7,7 +6,7 @@ import streamlit as st
 from streamlit_folium import folium_static
 import ee
 import pandas as pd
-from io import StringIO 
+
 
 collections.Callable = collections.abc.Callable
 
@@ -163,7 +162,7 @@ st.markdown(
     "<h3>1) Selecione e exporte os pontos de interesse 📌 </h3>",
     unsafe_allow_html=True,
 )
-
+ee.Authenticate(auth_mode='gcloud')
 m = geemap.Map(
     center=[-27.86, -50.20],
     zoom=10,

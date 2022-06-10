@@ -162,8 +162,7 @@ st.markdown(
     "<h3>1) Selecione e exporte os pontos de interesse 📌 </h3>",
     unsafe_allow_html=True,
 )
-ee.Authenticate()
-ee.Initialize()
+
 m = geemap.Map(
     center=[-27.86, -50.20],
     zoom=10,

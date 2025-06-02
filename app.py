@@ -3,7 +3,7 @@ import geopandas as gpd
 import geemap.foliumap as geemap
 import json
 import streamlit as st
-from streamlit_folium import folium_static
+from streamlit_folium import st_folium
 import ee
 import pandas as pd
 import os
@@ -164,7 +164,7 @@ m = geemap.Map(
 st.warning(
     "Usar **apenas** a ferramenta 'Draw a marker', para selecionar os pontos de interesse e, em seguida, clicar em 'Export'."
 )
-folium_static(m, width=700, height=400)
+st_folium(m, width=700, height=400)
 
 st.markdown("""---""")
 st.markdown(
@@ -184,7 +184,7 @@ st.markdown(
 
 input_areas = st.text_area(
     "Seguir a ordem indicada no mapa e separar por vírgula. Usar tecla 'tab' para confirmar",
-    height=50,
+    height=75,
 )
 areas_list = []
 if input_areas:

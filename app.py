@@ -215,24 +215,44 @@ if data and areas_list:
                 sampled = dataset.sampleRegions(
                     collection=roi,
                     scale=scale_resolution,
-                    geometries=True
+                    geometries=False  # Não precisamos das geometrias
                 )
                 
-                # Converte para DataFrame
-                df_extracted = geemap.ee_to_pandas(sampled)
+                # Converte ee.FeatureCollection para lista de features
+                features_list = sampled.getInfo()['features']
                 
-                # Remove colunas desnecessárias se existirem
-                bio_columns = [col for col in df_extracted.columns if col.startswith('bio')]
+                # Extrai as propriedades (dados bioclimáticos) de cada feature
+                bio_data = []
+                for feature in features_list:
+                    bio_data.append(feature['properties'])
+                
+                # Converte para DataFrame
+                df_extracted = pd.DataFrame(bio_data)
+                
+                # Garante que temos as colunas bio (algumas podem ter nomes ligeiramente diferentes)
+                bio_columns = [col for col in df_extracted.columns if 'bio' in col.lower()]
+                
+                # Se não encontrou colunas bio, usa todas as colunas numéricas
+                if not bio_columns:
+                    bio_columns = df_extracted.select_dtypes(include=[float, int]).columns.tolist()
+                
+                # Combina coordenadas com dados bioclimáticos
                 coords_data = pd.DataFrame({
-                    'latitude': pontos_df['latitude'],
-                    'longitude': pontos_df['longitude']
+                    'latitude': pontos_df['latitude'].values,
+                    'longitude': pontos_df['longitude'].values
                 })
                 
-                # Combina dados
-                df_final = pd.concat([coords_data.reset_index(drop=True), 
-                                    df_extracted[bio_columns].reset_index(drop=True)], axis=1)
-                df_final.index = areas_list
-                df_final = df_final.T
+                # Verifica se o número de linhas é compatível
+                if len(coords_data) == len(df_extracted):
+                    df_final = pd.concat([
+                        coords_data.reset_index(drop=True), 
+                        df_extracted[bio_columns].reset_index(drop=True)
+                    ], axis=1)
+                    df_final.index = areas_list
+                    df_final = df_final.T
+                else:
+                    st.error(f"❌ Incompatibilidade: {len(coords_data)} coordenadas vs {len(df_extracted)} extrações")
+                    raise ValueError("Número de pontos não coincide com extrações")
 
             st.markdown("---")
             st.markdown(

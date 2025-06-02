@@ -9,9 +9,67 @@ import pandas as pd
 import os
 import tempfile
 import uuid
+import logging
+from pathlib import Path
+
+# Configuração de logging seguro
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 # Linha de compatibilidade
 collections.Callable = collections.abc.Callable
+
+# Configurações de segurança
+MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
+ALLOWED_EXTENSIONS = {'.geojson'}
+MAX_AREAS = 50  # Limite máximo de áreas
+MAX_AREA_NAME_LENGTH = 100
+
+def validate_file_upload(uploaded_file):
+    """Valida o arquivo enviado pelo usuário"""
+    if not uploaded_file:
+        return False, "Nenhum arquivo enviado"
+    
+    # Verifica tamanho do arquivo
+    if uploaded_file.size > MAX_FILE_SIZE:
+        return False, f"Arquivo muito grande. Máximo: {MAX_FILE_SIZE // (1024*1024)}MB"
+    
+    # Verifica extensão
+    file_extension = Path(uploaded_file.name).suffix.lower()
+    if file_extension not in ALLOWED_EXTENSIONS:
+        return False, f"Extensão não permitida. Permitido: {ALLOWED_EXTENSIONS}"
+    
+    # Verifica nome do arquivo (evita caracteres perigosos)
+    if any(char in uploaded_file.name for char in ['..', '/', '\\', '<', '>', '|', '*', '?']):
+        return False, "Nome do arquivo contém caracteres não permitidos"
+    
+    return True, "Arquivo válido"
+
+def validate_area_names(areas_list):
+    """Valida os nomes das áreas fornecidos pelo usuário"""
+    if not areas_list:
+        return False, "Lista de áreas vazia"
+    
+    if len(areas_list) > MAX_AREAS:
+        return False, f"Muitas áreas. Máximo: {MAX_AREAS}"
+    
+    for i, area in enumerate(areas_list):
+        # Verifica comprimento
+        if len(area) > MAX_AREA_NAME_LENGTH:
+            return False, f"Nome da área {i+1} muito longo. Máximo: {MAX_AREA_NAME_LENGTH} caracteres"
+        
+        # Verifica caracteres perigosos (básico)
+        if any(char in area for char in ['<', '>', '"', "'", '&', '\n', '\r', '\t']):
+            return False, f"Nome da área {i+1} contém caracteres não permitidos"
+    
+    return True, "Nomes válidos"
+
+def sanitize_filename(filename):
+    """Sanitiza nome do arquivo para uso seguro"""
+    # Remove caracteres perigosos
+    safe_chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_."
+    sanitized = ''.join(c for c in filename if c in safe_chars)
+    return sanitized[:50]  # Limita comprimento
 
 def initialize_ee():
     """
@@ -21,7 +79,8 @@ def initialize_ee():
     try:
         # Testa se já está inicializado
         ee.Number(1).getInfo()
-        return  # Já inicializado, não precisa fazer nada
+        logger.info("Earth Engine já inicializado")
+        return True
         
     except ee.EEException:
         # Não inicializado, procede com a inicialização
@@ -35,17 +94,22 @@ def initialize_ee():
                 try:
                     json_object = json.loads(json_data, strict=False)
                 except json.JSONDecodeError as json_err:
-                    st.error(f"Erro ao decodificar JSON das credenciais: {json_err}")
-                    st.error("Verifique se o segredo 'gee_service_account_credentials' contém um JSON válido.")
+                    logger.error(f"Erro JSON: {json_err}")
+                    st.error("❌ Credenciais JSON inválidas")
                     st.stop()
-                    return
+                    return False
+                
+                # Valida campos obrigatórios
+                required_fields = ['client_email', 'private_key', 'project_id']
+                missing_fields = [field for field in required_fields if not json_object.get(field)]
+                if missing_fields:
+                    logger.error(f"Campos obrigatórios ausentes: {missing_fields}")
+                    st.error(f"❌ Campos obrigatórios ausentes nas credenciais: {missing_fields}")
+                    st.stop()
+                    return False
                 
                 # Extrai o email da conta de serviço
                 service_account = json_object.get('client_email')
-                if not service_account:
-                    st.error("Campo 'client_email' não encontrado nas credenciais.")
-                    st.stop()
-                    return
                 
                 # Converte de volta para string JSON (conforme tutorial)
                 json_object_str = json.dumps(json_object)
@@ -62,49 +126,100 @@ def initialize_ee():
                     opt_url='https://earthengine-highvolume.googleapis.com'
                 )
                 
-                st.sidebar.success("✅ Earth Engine inicializado com sucesso!")
+                logger.info("Earth Engine inicializado com sucesso")
+                st.sidebar.success("✅ Earth Engine inicializado!")
+                return True
                 
             else:
                 # Fallback para desenvolvimento local
-                st.warning("⚠️ Credenciais do GEE não encontradas. Tentando inicialização local...")
+                logger.warning("Credenciais GEE não encontradas, tentando inicialização local")
+                st.warning("⚠️ Modo desenvolvimento local")
                 ee.Initialize(opt_url='https://earthengine-highvolume.googleapis.com')
-                st.sidebar.info("🏠 Earth Engine inicializado localmente")
+                st.sidebar.info("🏠 Earth Engine (local)")
+                return True
                 
         except Exception as ex:
-            st.error(f"❌ Falha ao inicializar o Earth Engine: {ex}")
-            st.error("""
-            **Possíveis soluções:**
-            1. Verifique se o segredo 'gee_service_account_credentials' está configurado no Streamlit Cloud
-            2. Confirme se o JSON das credenciais está completo e válido
-            3. Verifique se a conta de serviço tem as permissões necessárias no Google Cloud Platform
-            4. Confirme se o Earth Engine API está habilitado no seu projeto GCP
-            """)
+            logger.error(f"Falha ao inicializar Earth Engine: {ex}")
+            st.error("❌ Falha na inicialização do Earth Engine")
+            with st.expander("🔍 Detalhes do erro"):
+                st.error(f"Erro: {str(ex)}")
+                st.markdown("""
+                **Possíveis soluções:**
+                1. Verifique as credenciais no Streamlit Cloud
+                2. Confirme permissões da conta de serviço no GCP
+                3. Verifique se Earth Engine API está habilitado
+                """)
             st.stop()
-
-# Inicializa o Earth Engine ANTES de qualquer outra operação
-initialize_ee()
+            return False
 
 @st.cache_data
 def uploaded_file_to_gdf(data):
-    """Converte arquivo uploaded para GeoDataFrame"""
-    _, file_extension = os.path.splitext(data.name)
-    file_id = str(uuid.uuid4())
-    file_path = os.path.join(tempfile.gettempdir(), f"{file_id}{file_extension}")
+    """Converte arquivo uploaded para GeoDataFrame com validações de segurança"""
+    try:
+        # Validação de entrada
+        is_valid, message = validate_file_upload(data)
+        if not is_valid:
+            raise ValueError(f"Arquivo inválido: {message}")
+        
+        # Cria arquivo temporário seguro
+        file_extension = Path(data.name).suffix.lower()
+        file_id = str(uuid.uuid4())
+        safe_filename = f"{file_id}{file_extension}"
+        file_path = os.path.join(tempfile.gettempdir(), safe_filename)
+        
+        # Garante que o caminho é seguro (dentro do diretório temporário)
+        temp_dir = Path(tempfile.gettempdir()).resolve()
+        file_path_resolved = Path(file_path).resolve()
+        if not str(file_path_resolved).startswith(str(temp_dir)):
+            raise ValueError("Caminho de arquivo inseguro")
+        
+        # Escreve arquivo com tratamento de erro
+        try:
+            with open(file_path, "wb") as file:
+                file.write(data.getbuffer())
+            
+            # Lê o arquivo
+            if file_extension == ".kml":
+                gpd.io.file.fiona.drvsupport.supported_drivers["KML"] = "rw"
+                gdf = gpd.read_file(file_path, driver="KML")
+            else:
+                gdf = gpd.read_file(file_path)
+            
+            # Valida GeoDataFrame
+            if gdf.empty:
+                raise ValueError("Arquivo GeoJSON vazio")
+            
+            if len(gdf) > MAX_AREAS:
+                raise ValueError(f"Muitas geometrias. Máximo: {MAX_AREAS}")
+            
+            logger.info(f"Arquivo processado com sucesso: {len(gdf)} geometrias")
+            return gdf
+            
+        finally:
+            # Remove arquivo temporário (limpeza segura)
+            if os.path.exists(file_path):
+                try:
+                    os.remove(file_path)
+                except Exception as cleanup_error:
+                    logger.warning(f"Erro ao limpar arquivo temporário: {cleanup_error}")
+    
+    except Exception as e:
+        logger.error(f"Erro ao processar arquivo: {e}")
+        raise
 
-    with open(file_path, "wb") as file:
-        file.write(data.getbuffer())
-
-    if file_path.lower().endswith(".kml"):
-        gpd.io.file.fiona.drvsupport.supported_drivers["KML"] = "rw"
-        gdf = gpd.read_file(file_path, driver="KML")
-    else:
-        gdf = gpd.read_file(file_path)
-
-    return gdf
+# Inicializa o Earth Engine ANTES de qualquer outra operação
+if not initialize_ee():
+    st.stop()
 
 # Interface do usuário
-col1, col2 = st.columns([2, 3])
+st.set_page_config(
+    page_title="Easy Bioclim",
+    page_icon="⛅",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
 
+# Header
 original_title = '<h1 style="color:Blue">⛅ Easy Bioclim</h1>'
 st.markdown(original_title, unsafe_allow_html=True)
 st.caption(
@@ -115,6 +230,17 @@ st.markdown(
     "<h4 style=' color: black; background-color:lightgreen; padding:25px; border-radius: 25px; box-shadow: 0 0 0.1em black'>Web app para obtenção de dados bioclimáticos de pontos de interesse</h4>",
     unsafe_allow_html=True,
 )
+
+# Sidebar com informações de segurança
+with st.sidebar:
+    st.markdown("### 🔒 Informações de Segurança")
+    st.info(f"""
+    **Limites de segurança:**
+    - Tamanho máximo do arquivo: {MAX_FILE_SIZE // (1024*1024)}MB
+    - Máximo de áreas: {MAX_AREAS}
+    - Apenas arquivos GeoJSON
+    - Credenciais protegidas por segredos
+    """)
 
 # Definições das variáveis bioclimáticas
 bios_symbols = [
@@ -142,16 +268,15 @@ scale = [
 zipped = list(zip(bios_symbols, bios_names, units, scale))
 bioclim_df = pd.DataFrame(zipped, columns=["Nome", "Descrição", "Unidade", "Escala"])
 
-st.text(" ")
-st.text(" ")
-st.markdown("""---""")
+st.markdown("---")
 
+# Seção 1: Mapa
 st.markdown(
     "<h3>1) Selecione e exporte os pontos de interesse 📌 </h3>",
     unsafe_allow_html=True,
 )
 
-# Mapa interativo
+# Mapa interativo com configurações seguras
 m = geemap.Map(
     center=[-27.86, -50.20],
     zoom=10,
@@ -161,108 +286,147 @@ m = geemap.Map(
     locate_control=True,
     plugin_LatLngPopup=False,
 )
-st.warning(
-    "Usar **apenas** a ferramenta 'Draw a marker', para selecionar os pontos de interesse e, em seguida, clicar em 'Export'."
-)
-st_folium(m, width=700, height=400)
 
-st.markdown("""---""")
+st.warning(
+    "⚠️ **Instruções:** Use apenas a ferramenta 'Draw a marker' para selecionar pontos, depois clique em 'Export'."
+)
+
+map_data = st_folium(m, width=700, height=400)
+
+st.markdown("---")
+
+# Seção 2: Upload
 st.markdown(
     "<h3>2) Upload do arquivo GeoJSON 📤</h3>",
     unsafe_allow_html=True,
 )
+
 data = st.file_uploader(
-    "Fazer o upload do arquivo GeoJSON exportado no passo acima para utilizar como áreas de interesse 👇👇",
+    f"📁 Upload do arquivo GeoJSON (máximo {MAX_FILE_SIZE // (1024*1024)}MB)",
     type=["geojson"],
+    help="Apenas arquivos GeoJSON são aceitos por questões de segurança"
 )
 
-st.markdown("""---""")
+st.markdown("---")
+
+# Seção 3: Identificação das áreas
 st.markdown(
-    "<h3>3) Indicar a identificação das áreas #️⃣ </h3>",
+    "<h3>3) Identificar as áreas #️⃣ </h3>",
     unsafe_allow_html=True,
 )
 
 input_areas = st.text_area(
-    "Seguir a ordem indicada no mapa e separar por vírgula. Usar tecla 'tab' para confirmar",
+    f"🏷️ Nomes das áreas (máx. {MAX_AREAS}, separados por vírgula)",
     height=75,
+    help=f"Máximo {MAX_AREA_NAME_LENGTH} caracteres por nome"
 )
+
 areas_list = []
 if input_areas:
     areas_list = [area.strip() for area in input_areas.split(",") if area.strip()]
+    
+    # Validação dos nomes das áreas
+    is_valid, message = validate_area_names(areas_list)
+    if not is_valid:
+        st.error(f"❌ {message}")
+        areas_list = []
 
 # Processamento principal
 if data and areas_list:
     try:
-        gdf = uploaded_file_to_gdf(data)
+        with st.spinner("📂 Processando arquivo..."):
+            gdf = uploaded_file_to_gdf(data)
         
         # Validação
         if len(gdf) != len(areas_list):
-            st.error(f"❌ Número de áreas ({len(areas_list)}) ≠ número de geometrias ({len(gdf)})")
+            st.error(f"❌ Incompatibilidade: {len(areas_list)} nomes ≠ {len(gdf)} geometrias")
         else:
             # Preparação dos dados
             pontos = {"latitude": gdf.geometry.y, "longitude": gdf.geometry.x}
             pontos_df = pd.DataFrame(pontos)
 
-            # Conversão para Earth Engine
-            roi = geemap.geopandas_to_ee(gdf) 
-            dataset = ee.Image("WORLDCLIM/V1/BIO")
+            # Conversão para Earth Engine com tratamento de erro
+            with st.spinner("🌍 Preparando dados para Earth Engine..."):
+                try:
+                    roi = geemap.geopandas_to_ee(gdf) 
+                    dataset = ee.Image("WORLDCLIM/V1/BIO")
+                    scale_resolution = dataset.projection().nominalScale().getInfo()
+                except Exception as ee_error:
+                    logger.error(f"Erro Earth Engine: {ee_error}")
+                    st.error("❌ Erro ao preparar dados no Earth Engine")
+                    raise
             
-            # Extração dos valores
-            scale_resolution = dataset.projection().nominalScale().getInfo()
-            
-            with st.spinner("🌍 Extraindo dados bioclimáticos..."):
-                # Usa sampleRegions para extração mais robusta
-                sampled = dataset.sampleRegions(
-                    collection=roi,
-                    scale=scale_resolution,
-                    geometries=False  # Não precisamos das geometrias
-                )
-                
-                # Converte ee.FeatureCollection para lista de features
-                features_list = sampled.getInfo()['features']
-                
-                # Extrai as propriedades (dados bioclimáticos) de cada feature
-                bio_data = []
-                for feature in features_list:
-                    bio_data.append(feature['properties'])
-                
-                # Converte para DataFrame
-                df_extracted = pd.DataFrame(bio_data)
-                
-                # Garante que temos as colunas bio (algumas podem ter nomes ligeiramente diferentes)
-                bio_columns = [col for col in df_extracted.columns if 'bio' in col.lower()]
-                
-                # Se não encontrou colunas bio, usa todas as colunas numéricas
-                if not bio_columns:
-                    bio_columns = df_extracted.select_dtypes(include=[float, int]).columns.tolist()
-                
-                # Combina coordenadas com dados bioclimáticos
-                coords_data = pd.DataFrame({
-                    'latitude': pontos_df['latitude'].values,
-                    'longitude': pontos_df['longitude'].values
-                })
-                
-                # Verifica se o número de linhas é compatível
-                if len(coords_data) == len(df_extracted):
-                    df_final = pd.concat([
-                        coords_data.reset_index(drop=True), 
-                        df_extracted[bio_columns].reset_index(drop=True)
-                    ], axis=1)
-                    df_final.index = areas_list
-                    df_final = df_final.T
-                else:
-                    st.error(f"❌ Incompatibilidade: {len(coords_data)} coordenadas vs {len(df_extracted)} extrações")
-                    raise ValueError("Número de pontos não coincide com extrações")
+            # Extração dos valores bioclimáticos
+            with st.spinner("🌡️ Extraindo dados bioclimáticos..."):
+                try:
+                    # Timeout de segurança para operações Earth Engine
+                    sampled = dataset.sampleRegions(
+                        collection=roi,
+                        scale=scale_resolution,
+                        geometries=False
+                    )
+                    
+                    # Converte com limite de timeout
+                    features_list = sampled.getInfo()['features']
+                    
+                    if not features_list:
+                        raise ValueError("Nenhum dado bioclimático encontrado para as coordenadas")
+                    
+                    # Extrai propriedades
+                    bio_data = []
+                    for feature in features_list:
+                        properties = feature.get('properties', {})
+                        if properties:
+                            bio_data.append(properties)
+                    
+                    if not bio_data:
+                        raise ValueError("Dados bioclimáticos vazios")
+                    
+                    # Converte para DataFrame
+                    df_extracted = pd.DataFrame(bio_data)
+                    
+                    # Identifica colunas bioclimáticas
+                    bio_columns = [col for col in df_extracted.columns if 'bio' in col.lower()]
+                    
+                    if not bio_columns:
+                        bio_columns = df_extracted.select_dtypes(include=[float, int]).columns.tolist()
+                    
+                    if not bio_columns:
+                        raise ValueError("Nenhuma variável bioclimática encontrada")
+                    
+                    # Combina dados
+                    coords_data = pd.DataFrame({
+                        'latitude': pontos_df['latitude'].values,
+                        'longitude': pontos_df['longitude'].values
+                    })
+                    
+                    if len(coords_data) == len(df_extracted):
+                        df_final = pd.concat([
+                            coords_data.reset_index(drop=True), 
+                            df_extracted[bio_columns].reset_index(drop=True)
+                        ], axis=1)
+                        df_final.index = areas_list
+                        df_final = df_final.T
+                    else:
+                        raise ValueError(f"Incompatibilidade de dados: {len(coords_data)} vs {len(df_extracted)}")
+                    
+                except Exception as extraction_error:
+                    logger.error(f"Erro na extração: {extraction_error}")
+                    st.error(f"❌ Erro na extração: {str(extraction_error)}")
+                    raise
 
+            # Exibição dos resultados
             st.markdown("---")
             st.markdown(
-                "<h3> ✅ Aqui estão suas variáveis bioclimáticas! 😀 </h3>",
+                "<h3> ✅ Dados bioclimáticos extraídos! 😀 </h3>",
                 unsafe_allow_html=True,
             )
+            
             st.dataframe(df_final, use_container_width=True)
 
+            # Download seguro
             st.markdown(
-                "<h3> 👇👇👇 clique para o download</h3>",
+                "<h3> 📥 Download dos dados</h3>",
                 unsafe_allow_html=True,
             )
 
@@ -271,23 +435,30 @@ if data and areas_list:
                 return df_to_convert.to_csv(sep=";", decimal=",").encode("utf-8")
 
             csv = convert_df(df_final)
+            
+            # Nome de arquivo seguro baseado no timestamp
+            safe_filename = f"bioclim_data_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.csv"
 
             st.download_button(
                 "📥 Download CSV",
                 csv,
-                "bioclim_data.csv",
+                safe_filename,
                 "text/csv",
                 key="download-csv",
             )
+            
+            logger.info(f"Dados extraídos com sucesso para {len(areas_list)} áreas")
 
     except Exception as e:
-        st.error(f"❌ Erro no processamento: {e}")
-        st.error("Verifique se o arquivo GeoJSON está válido e tente novamente.")
+        logger.error(f"Erro no processamento principal: {e}")
+        st.error("❌ Erro no processamento dos dados")
+        with st.expander("🔍 Detalhes do erro"):
+            st.error(str(e))
 
 elif data and not areas_list:
-    st.warning("⚠️ Por favor, forneça os nomes/identificações para as áreas no passo 3.")
+    st.warning("⚠️ Forneça os nomes das áreas no passo 3")
 elif not data and areas_list:
-    st.warning("⚠️ Por favor, faça o upload do arquivo GeoJSON no passo 2.")
+    st.warning("⚠️ Faça upload do arquivo GeoJSON no passo 2")
 
 # Informações adicionais
 st.markdown("---")

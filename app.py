@@ -1,93 +1,92 @@
 import collections
 import geopandas as gpd
-import geemap.foliumap as geemap # geemap já importa ee
+import geemap.foliumap as geemap
 import json
 import streamlit as st
 from streamlit_folium import folium_static
-import ee # Importar explicitamente para inicialização
+import ee
 import pandas as pd
-import os # Para uploaded_file_to_gdf
-import tempfile # Para uploaded_file_to_gdf
-import uuid # Para uploaded_file_to_gdf
+import os
+import tempfile
+import uuid
 
-# Sua linha de compatibilidade (importante para algumas versões de Python/bibliotecas)
+# Linha de compatibilidade
 collections.Callable = collections.abc.Callable
 
-# Função para inicializar o Earth Engine
 def initialize_ee():
     """
     Inicializa o Google Earth Engine usando credenciais de conta de serviço
     armazenadas nos segredos do Streamlit.
     """
     try:
-        # Tenta uma operação simples para verificar se já está inicializado
+        # Testa se já está inicializado
         ee.Number(1).getInfo()
-        # st.sidebar.info("Earth Engine já inicializado.") # Opcional para debug
-    except ee.EEException as e:
-        # Se não inicializado ou erro de credencial, tenta inicializar
+        return  # Já inicializado, não precisa fazer nada
+        
+    except ee.EEException:
+        # Não inicializado, procede com a inicialização
         try:
-            # Verifica se o segredo com as credenciais JSON está configurado
+            # Verifica se as credenciais estão nos segredos do Streamlit
             if "gee_service_account_credentials" in st.secrets:
-                # st.secrets retorna um objeto TomlOrderedDict, pegue o valor string
-                google_credentials_json_str = st.secrets["gee_service_account_credentials"]
+                # Obtém a string JSON das credenciais
+                json_data = st.secrets["gee_service_account_credentials"]
                 
-                # Parse o JSON para um dicionário
+                # Parse do JSON (seguindo o tutorial)
                 try:
-                    credentials_dict = json.loads(google_credentials_json_str)
+                    json_object = json.loads(json_data, strict=False)
                 except json.JSONDecodeError as json_err:
-                    st.error(f"Erro ao decodificar o JSON das credenciais: {json_err}")
-                    st.error(f"Verifique o formato do segredo 'gee_service_account_credentials'. Ele deve ser o CONTEÚDO do arquivo JSON.")
+                    st.error(f"Erro ao decodificar JSON das credenciais: {json_err}")
+                    st.error("Verifique se o segredo 'gee_service_account_credentials' contém um JSON válido.")
                     st.stop()
                     return
-
-                # O e-mail da conta de serviço está dentro do arquivo JSON da chave
-                service_account_email = credentials_dict.get('client_email')
-                if not service_account_email:
-                    st.error("A chave 'client_email' não foi encontrada nas credenciais JSON.")
+                
+                # Extrai o email da conta de serviço
+                service_account = json_object.get('client_email')
+                if not service_account:
+                    st.error("Campo 'client_email' não encontrado nas credenciais.")
                     st.stop()
                     return
-
-                # Inicializa as credenciais.
-                # A documentação do ee.ServiceAccountCredentials sugere que key_data pode ser a string JSON.
+                
+                # Converte de volta para string JSON (conforme tutorial)
+                json_object_str = json.dumps(json_object)
+                
+                # Cria as credenciais
                 credentials = ee.ServiceAccountCredentials(
-                    service_account_email, 
-                    key_data=google_credentials_json_str # Passa a string JSON diretamente
+                    service_account, 
+                    key_data=json_object_str
                 )
                 
-                # Inicializa o Earth Engine com as credenciais e, opcionalmente, o projeto.
-                # O endpoint de alto volume pode ser útil.
+                # Inicializa o Earth Engine
                 ee.Initialize(
                     credentials=credentials,
                     opt_url='https://earthengine-highvolume.googleapis.com'
-                    # project='seu-gcp-project-id' # Opcional, se o GEE precisar explicitamente
                 )
-                # st.sidebar.success("Earth Engine Inicializado com Sucesso via Conta de Serviço!") # Opcional para debug
+                
+                st.sidebar.success("✅ Earth Engine inicializado com sucesso!")
+                
             else:
-                # Fallback para desenvolvimento local (se os segredos não estiverem configurados)
-                # Isso pode tentar usar credenciais padrão locais ou falhar se não configurado.
-                st.warning("Credenciais da conta de serviço do GEE não encontradas nos segredos. Tentando inicialização padrão (local).")
+                # Fallback para desenvolvimento local
+                st.warning("⚠️ Credenciais do GEE não encontradas. Tentando inicialização local...")
                 ee.Initialize(opt_url='https://earthengine-highvolume.googleapis.com')
-
+                st.sidebar.info("🏠 Earth Engine inicializado localmente")
+                
         except Exception as ex:
-            st.error(f"Falha ao inicializar o Earth Engine: {ex}")
-            st.error("Verifique se o segredo 'gee_service_account_credentials' está configurado corretamente no Streamlit Cloud e se a conta de serviço tem as permissões necessárias no GCP.")
-            st.stop() # Para a execução do app se o GEE não puder ser inicializado
-    # except Exception as general_exception: # Captura outras exceções durante a verificação
-    #     st.warning(f"Não foi possível verificar o status do EE, tentando inicializar: {general_exception}")
-    #     # Proceder com a tentativa de inicialização como acima.
-    #     # Esta lógica pode ser duplicada ou refatorada para evitar repetição.
+            st.error(f"❌ Falha ao inicializar o Earth Engine: {ex}")
+            st.error("""
+            **Possíveis soluções:**
+            1. Verifique se o segredo 'gee_service_account_credentials' está configurado no Streamlit Cloud
+            2. Confirme se o JSON das credenciais está completo e válido
+            3. Verifique se a conta de serviço tem as permissões necessárias no Google Cloud Platform
+            4. Confirme se o Earth Engine API está habilitado no seu projeto GCP
+            """)
+            st.stop()
 
-# Chame a função de inicialização no início do seu script, ANTES de qualquer chamada ao 'ee' ou 'geemap' que use 'ee'.
+# Inicializa o Earth Engine ANTES de qualquer outra operação
 initialize_ee()
 
-# st.set_page_config(layout="wide") # Mova para o topo se for usar
-
-@st.cache_data # st.cache foi depreciado, use st.cache_data ou st.cache_resource
+@st.cache_data
 def uploaded_file_to_gdf(data):
-    # import tempfile # Já importado globalmente
-    # import os # Já importado globalmente
-    # import uuid # Já importado globalmente
-
+    """Converte arquivo uploaded para GeoDataFrame"""
     _, file_extension = os.path.splitext(data.name)
     file_id = str(uuid.uuid4())
     file_path = os.path.join(tempfile.gettempdir(), f"{file_id}{file_extension}")
@@ -103,22 +102,21 @@ def uploaded_file_to_gdf(data):
 
     return gdf
 
-# Resto do seu código...
-col1, col2 = st.columns([2, 3]) # Descomente se for usar
+# Interface do usuário
+col1, col2 = st.columns([2, 3])
 
-# with col1: # Descomente se for usar
 original_title = '<h1 style="color:Blue">⛅ Easy Bioclim</h1>'
 st.markdown(original_title, unsafe_allow_html=True)
 st.caption(
     "Powered by worldclim.org, Google Earth Engine and Python | Developed by Pedro Higuchi ([@pe_hi](https://twitter.com/pe_hi))"
 )
 
-# with col2: # Descomente se for usar
 st.markdown(
     "<h4 style=' color: black; background-color:lightgreen; padding:25px; border-radius: 25px; box-shadow: 0 0 0.1em black'>Web app para obtenção de dados bioclimáticos de pontos de interesse</h4>",
     unsafe_allow_html=True,
 )
 
+# Definições das variáveis bioclimáticas
 bios_symbols = [
     "BIO1", "BIO2", "BIO3", "BIO4", "BIO5", "BIO6", "BIO7", "BIO8", "BIO9", "BIO10",
     "BIO11", "BIO12", "BIO13", "BIO14", "BIO15", "BIO16", "BIO17", "BIO18", "BIO19",
@@ -153,8 +151,7 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# Certifique-se que ee está inicializado antes de chamar geemap.Map se ele for usar ee implicitamente
-# A chamada initialize_ee() no início já cuida disso.
+# Mapa interativo
 m = geemap.Map(
     center=[-27.86, -50.20],
     zoom=10,
@@ -190,121 +187,101 @@ input_areas = st.text_area(
     height=50,
 )
 areas_list = []
-if input_areas: # Evitar erro se input_areas for vazio
+if input_areas:
     areas_list = [area.strip() for area in input_areas.split(",") if area.strip()]
 
-
-# Mova a lógica que depende de 'data' e 'input_areas' para dentro de um if
-if data and areas_list: # Garante que ambos os inputs estão presentes
-    gdf = uploaded_file_to_gdf(data)
-    
-    # Validação: Verifique se o número de geometrias corresponde ao número de nomes de áreas
-    if len(gdf) != len(areas_list):
-        st.error(f"O número de áreas identificadas ({len(areas_list)}) não corresponde ao número de geometrias no arquivo GeoJSON ({len(gdf)}). Por favor, verifique.")
-    else:
-        pontos = {"latitude": gdf.geometry.y, "longitude": gdf.geometry.x}
-        pontos_df = pd.DataFrame(pontos) # Renomeado para evitar conflito com a variável 'pontos' do GDF
-
-        gdf_json_str = gdf.to_json() # Correção: gdf é um GeoDataFrame, não precisa ser convertido para json e depois para dict
-        # gdf_features = json.loads(gdf_json_str)["features"] # Esta linha é para quando se tem o JSON string
+# Processamento principal
+if data and areas_list:
+    try:
+        gdf = uploaded_file_to_gdf(data)
         
-        # Para converter GeoDataFrame para ee.FeatureCollection diretamente com geemap:
-        try:
+        # Validação
+        if len(gdf) != len(areas_list):
+            st.error(f"❌ Número de áreas ({len(areas_list)}) ≠ número de geometrias ({len(gdf)})")
+        else:
+            # Preparação dos dados
+            pontos = {"latitude": gdf.geometry.y, "longitude": gdf.geometry.x}
+            pontos_df = pd.DataFrame(pontos)
+
+            # Conversão para Earth Engine
             roi = geemap.geopandas_to_ee(gdf) 
-        except Exception as e_feature_collection:
-            st.error(f"Erro ao converter GeoDataFrame para ee.FeatureCollection: {e_feature_collection}")
-            st.stop()
-
-        dataset = ee.Image("WORLDCLIM/V1/BIO")
-        
-        try:
-            # geemap.extract_values_to_points retorna uma lista de valores, que precisa ser processada.
-            # Se você quer um DataFrame direto, geemap.ee_to_pandas(image.sampleRegions(collection=roi, scale=scale_resolution)) é mais comum.
-            # Vamos usar o extract_values_to_points e convertê-lo.
-            # Primeiro, defina a escala (resolução) para a extração. A imagem WorldClim tem uma escala nativa.
-            # A escala nativa do WorldClim V1 BIO é de 30 arc-seconds (aprox. 1km).
-            # Você pode obter a projeção e a escala da imagem:
+            dataset = ee.Image("WORLDCLIM/V1/BIO")
+            
+            # Extração dos valores
             scale_resolution = dataset.projection().nominalScale().getInfo()
+            
+            with st.spinner("🌍 Extraindo dados bioclimáticos..."):
+                # Usa sampleRegions para extração mais robusta
+                sampled = dataset.sampleRegions(
+                    collection=roi,
+                    scale=scale_resolution,
+                    geometries=True
+                )
+                
+                # Converte para DataFrame
+                df_extracted = geemap.ee_to_pandas(sampled)
+                
+                # Remove colunas desnecessárias se existirem
+                bio_columns = [col for col in df_extracted.columns if col.startswith('bio')]
+                coords_data = pd.DataFrame({
+                    'latitude': pontos_df['latitude'],
+                    'longitude': pontos_df['longitude']
+                })
+                
+                # Combina dados
+                df_final = pd.concat([coords_data.reset_index(drop=True), 
+                                    df_extracted[bio_columns].reset_index(drop=True)], axis=1)
+                df_final.index = areas_list
+                df_final = df_final.T
 
-            df_ee_values = geemap.extract_values_to_points(roi, dataset, scale=scale_resolution) 
-            # df_ee_values é uma lista de dicionários (ou uma ee.FeatureCollection dependendo da versão do geemap)
-            # Se for uma ee.FeatureCollection, converta para pandas
-            if isinstance(df_ee_values, ee.featurecollection.FeatureCollection):
-                 df_extracted = geemap.ee_to_pandas(df_ee_values)
-            elif isinstance(df_ee_values, list): # geemap pode retornar lista de listas/valores
-                 # A estrutura de df_ee_values pode variar. Precisa inspecionar.
-                 # Supondo que seja uma lista de valores para cada banda por ponto:
-                 # E que as colunas sejam as bandas da imagem "WORLDCLIM/V1/BIO"
-                 band_names = dataset.bandNames().getInfo()
-                 if df_ee_values and isinstance(df_ee_values[0], list):
-                    df_extracted = pd.DataFrame(df_ee_values, columns=band_names)
-                 else: # Tentar uma conversão genérica se a estrutura for diferente
-                    df_extracted = pd.DataFrame(df_ee_values) # Pode precisar de mais ajustes
-            else:
-                st.error("Formato inesperado de 'extract_values_to_points'. Verifique a saída.")
-                st.stop()
-
-        except Exception as e_extract:
-            st.error(f"Erro durante a extração de valores do Earth Engine: {e_extract}")
-            st.error("Isso pode ocorrer devido a problemas de permissão, formato de ROI ou limites de uso do GEE.")
-            st.stop()
-
-
-        st.markdown("---")
-
-        # Concatenar com base nos índices se os dataframes tiverem o mesmo número de linhas
-        if len(pontos_df) == len(df_extracted):
-            df_final = pd.concat([pontos_df.reset_index(drop=True), df_extracted.reset_index(drop=True)], axis=1)
-            df_final.index = areas_list
-            df_final = df_final.T
+            st.markdown("---")
             st.markdown(
-                "<h3> Aqui estão suas variáveis bioclimáticas! 😀 </h3>",
+                "<h3> ✅ Aqui estão suas variáveis bioclimáticas! 😀 </h3>",
                 unsafe_allow_html=True,
             )
-            st.dataframe(df_final) # Use st.dataframe para melhor visualização
+            st.dataframe(df_final, use_container_width=True)
 
             st.markdown(
                 "<h3> 👇👇👇 clique para o download</h3>",
                 unsafe_allow_html=True,
             )
 
+            @st.cache_data
             def convert_df(df_to_convert):
                 return df_to_convert.to_csv(sep=";", decimal=",").encode("utf-8")
 
             csv = convert_df(df_final)
 
             st.download_button(
-                "Download CSV...",
+                "📥 Download CSV",
                 csv,
-                "bioclim_data.csv", # Nome de arquivo mais descritivo
+                "bioclim_data.csv",
                 "text/csv",
                 key="download-csv",
             )
-        else:
-            st.error(f"Inconsistência no número de linhas entre coordenadas ({len(pontos_df)}) e valores extraídos ({len(df_extracted)}). Não foi possível combinar os dados.")
-            st.write("Dados de coordenadas:", pontos_df)
-            st.write("Dados extraídos do EE:", df_extracted)
 
-
-        st.markdown("---")
-        st.markdown(
-            "<h5>Detalhamento:</h5>",
-            unsafe_allow_html=True,
-        )
-        st.markdown(
-            "Para maiores informações, acessar o site do [worldclim](https://www.worldclim.org/)."
-        )
-        st.table(bioclim_df.set_index("Nome"))
-        st.caption("Resolução da fonte WorldClim V1: ~1 km (30 arc-seconds)")
-
+    except Exception as e:
+        st.error(f"❌ Erro no processamento: {e}")
+        st.error("Verifique se o arquivo GeoJSON está válido e tente novamente.")
 
 elif data and not areas_list:
-    st.warning("Por favor, forneça os nomes/identificações para as áreas no passo 3.")
+    st.warning("⚠️ Por favor, forneça os nomes/identificações para as áreas no passo 3.")
 elif not data and areas_list:
-    st.warning("Por favor, faça o upload do arquivo GeoJSON no passo 2.")
+    st.warning("⚠️ Por favor, faça o upload do arquivo GeoJSON no passo 2.")
 
+# Informações adicionais
+st.markdown("---")
+st.markdown(
+    "<h5>📊 Detalhamento das variáveis bioclimáticas:</h5>",
+    unsafe_allow_html=True,
+)
+st.markdown(
+    "Para maiores informações, acessar o site do [worldclim](https://www.worldclim.org/)."
+)
+st.table(bioclim_df.set_index("Nome"))
+st.caption("📏 Resolução da fonte WorldClim V1: ~1 km (30 arc-seconds)")
 
 st.markdown("---")
-st.subheader("Referência")
+st.subheader("📚 Referência")
 referencia = "<p>Hijmans, R.J., S.E. Cameron, J.L. Parra, P.G. Jones and A. Jarvis, 2005. Very High Resolution Interpolated Climate Surfaces for Global Land Areas. International Journal of Climatology 25: 1965-1978. doi:10.1002/joc.1276.</p>"
 st.markdown(referencia, unsafe_allow_html=True)

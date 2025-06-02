@@ -215,32 +215,42 @@ if not initialize_ee():
 st.set_page_config(
     page_title="Easy Bioclim",
     page_icon="⛅",
-    layout="wide",
-    initial_sidebar_state="expanded"
+    layout="centered",
+    initial_sidebar_state="collapsed"
 )
 
-# Header
-original_title = '<h1 style="color:Blue">⛅ Easy Bioclim</h1>'
-st.markdown(original_title, unsafe_allow_html=True)
-st.caption(
-    "Powered by worldclim.org, Google Earth Engine and Python | Developed by Pedro Higuchi ([@pe_hi](https://twitter.com/pe_hi))"
-)
+# Header principal
+col1, col2 = st.columns([2, 3])
 
-st.markdown(
-    "<h4 style=' color: black; background-color:lightgreen; padding:25px; border-radius: 25px; box-shadow: 0 0 0.1em black'>Web app para obtenção de dados bioclimáticos de pontos de interesse</h4>",
-    unsafe_allow_html=True,
-)
+with col1:
+    original_title = '<h1 style="color:Blue">⛅ Easy Bioclim</h1>'
+    st.markdown(original_title, unsafe_allow_html=True)
+    st.caption(
+        "Powered by worldclim.org, Google Earth Engine and Python | Developed by Pedro Higuchi ([@pe_hi](https://twitter.com/pe_hi))"
+    )
 
-# Sidebar com informações de segurança
+with col2:
+    st.markdown(
+        "<h4 style=' color: black; background-color:lightgreen; padding:25px; border-radius: 25px; box-shadow: 0 0 0.1em black'>Web app para obtenção de dados bioclimáticos de pontos de interesse</h4>",
+        unsafe_allow_html=True,
+    )
+
+# Sidebar compacto com informações de segurança
 with st.sidebar:
-    st.markdown("### 🔒 Informações de Segurança")
+    st.markdown("### 🔒 Limites de Segurança")
     st.info(f"""
-    **Limites de segurança:**
-    - Tamanho máximo do arquivo: {MAX_FILE_SIZE // (1024*1024)}MB
-    - Máximo de áreas: {MAX_AREAS}
-    - Apenas arquivos GeoJSON
-    - Credenciais protegidas por segredos
+    📁 Arquivo máx: {MAX_FILE_SIZE // (1024*1024)}MB  
+    📍 Áreas máx: {MAX_AREAS}  
+    🔒 Apenas GeoJSON  
     """)
+    
+    # Status do Earth Engine
+    if st.button("🔄 Status GEE"):
+        try:
+            ee.Number(1).getInfo()
+            st.success("✅ GEE Conectado")
+        except:
+            st.error("❌ GEE Desconectado")
 
 # Definições das variáveis bioclimáticas
 bios_symbols = [
@@ -268,6 +278,7 @@ scale = [
 zipped = list(zip(bios_symbols, bios_names, units, scale))
 bioclim_df = pd.DataFrame(zipped, columns=["Nome", "Descrição", "Unidade", "Escala"])
 
+st.text(" ")
 st.markdown("---")
 
 # Seção 1: Mapa
@@ -291,7 +302,10 @@ st.warning(
     "⚠️ **Instruções:** Use apenas a ferramenta 'Draw a marker' para selecionar pontos, depois clique em 'Export'."
 )
 
-map_data = st_folium(m, width=700, height=400)
+# Container centralizado para o mapa
+map_container = st.container()
+with map_container:
+    map_data = st_folium(m, width=700, height=400, returned_objects=["last_clicked", "all_drawings"])
 
 st.markdown("---")
 
@@ -302,9 +316,9 @@ st.markdown(
 )
 
 data = st.file_uploader(
-    f"📁 Upload do arquivo GeoJSON (máximo {MAX_FILE_SIZE // (1024*1024)}MB)",
+    f"📁 Faça upload do arquivo GeoJSON exportado acima",
     type=["geojson"],
-    help="Apenas arquivos GeoJSON são aceitos por questões de segurança"
+    help=f"Limite: {MAX_FILE_SIZE // (1024*1024)}MB • Apenas arquivos GeoJSON são aceitos"
 )
 
 st.markdown("---")
@@ -316,9 +330,10 @@ st.markdown(
 )
 
 input_areas = st.text_area(
-    f"🏷️ Nomes das áreas (máx. {MAX_AREAS}, separados por vírgula)",
+    "🏷️ Digite os nomes das áreas separados por vírgula:",
     height=75,
-    help=f"Máximo {MAX_AREA_NAME_LENGTH} caracteres por nome"
+    placeholder="Exemplo: Área 1, Ponto Central, Local de Estudo...",
+    help=f"Seguir ordem do mapa • Máx: {MAX_AREAS} áreas, {MAX_AREA_NAME_LENGTH} chars/nome"
 )
 
 areas_list = []
@@ -417,35 +432,51 @@ if data and areas_list:
 
             # Exibição dos resultados
             st.markdown("---")
+            st.success("🎉 **Processamento concluído com sucesso!**")
             st.markdown(
-                "<h3> ✅ Dados bioclimáticos extraídos! 😀 </h3>",
+                "<h3> 📊 Seus dados bioclimáticos:</h3>",
                 unsafe_allow_html=True,
             )
+            
+            # Métricas rápidas
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("📍 Áreas", len(areas_list))
+            with col2:
+                st.metric("🌡️ Variáveis", len(bio_columns))
+            with col3:
+                st.metric("📏 Resolução", "~1km")
             
             st.dataframe(df_final, use_container_width=True)
 
-            # Download seguro
-            st.markdown(
-                "<h3> 📥 Download dos dados</h3>",
-                unsafe_allow_html=True,
-            )
+            # Download em container destacado
+            st.markdown("---")
+            download_container = st.container()
+            with download_container:
+                col1, col2, col3 = st.columns([1, 2, 1])
+                with col2:
+                    st.markdown(
+                        "<h3 style='text-align: center;'> 📥 Download dos dados</h3>",
+                        unsafe_allow_html=True,
+                    )
 
-            @st.cache_data
-            def convert_df(df_to_convert):
-                return df_to_convert.to_csv(sep=";", decimal=",").encode("utf-8")
+                    @st.cache_data
+                    def convert_df(df_to_convert):
+                        return df_to_convert.to_csv(sep=";", decimal=",").encode("utf-8")
 
-            csv = convert_df(df_final)
-            
-            # Nome de arquivo seguro baseado no timestamp
-            safe_filename = f"bioclim_data_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.csv"
+                    csv = convert_df(df_final)
+                    
+                    # Nome de arquivo seguro baseado no timestamp
+                    safe_filename = f"bioclim_data_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.csv"
 
-            st.download_button(
-                "📥 Download CSV",
-                csv,
-                safe_filename,
-                "text/csv",
-                key="download-csv",
-            )
+                    st.download_button(
+                        "📥 Download CSV",
+                        csv,
+                        safe_filename,
+                        "text/csv",
+                        key="download-csv",
+                        use_container_width=True
+                    )
             
             logger.info(f"Dados extraídos com sucesso para {len(areas_list)} áreas")
 
@@ -460,19 +491,19 @@ elif data and not areas_list:
 elif not data and areas_list:
     st.warning("⚠️ Faça upload do arquivo GeoJSON no passo 2")
 
-# Informações adicionais
+# Informações adicionais em seção colapsável
 st.markdown("---")
-st.markdown(
-    "<h5>📊 Detalhamento das variáveis bioclimáticas:</h5>",
-    unsafe_allow_html=True,
-)
-st.markdown(
-    "Para maiores informações, acessar o site do [worldclim](https://www.worldclim.org/)."
-)
-st.table(bioclim_df.set_index("Nome"))
-st.caption("📏 Resolução da fonte WorldClim V1: ~1 km (30 arc-seconds)")
 
+# Tabela de variáveis bioclimáticas em expander
+with st.expander("📊 **Detalhamento das variáveis bioclimáticas** (clique para expandir)", expanded=False):
+    st.markdown(
+        "Para maiores informações, acessar o site do [worldclim](https://www.worldclim.org/)."
+    )
+    st.table(bioclim_df.set_index("Nome"))
+    st.caption("📏 Resolução da fonte WorldClim V1: ~1 km (30 arc-seconds)")
+
+# Referência em footer
 st.markdown("---")
-st.subheader("📚 Referência")
-referencia = "<p>Hijmans, R.J., S.E. Cameron, J.L. Parra, P.G. Jones and A. Jarvis, 2005. Very High Resolution Interpolated Climate Surfaces for Global Land Areas. International Journal of Climatology 25: 1965-1978. doi:10.1002/joc.1276.</p>"
+st.markdown("### 📚 Referência")
+referencia = "<small>Hijmans, R.J., S.E. Cameron, J.L. Parra, P.G. Jones and A. Jarvis, 2005. Very High Resolution Interpolated Climate Surfaces for Global Land Areas. International Journal of Climatology 25: 1965-1978. doi:10.1002/joc.1276.</small>"
 st.markdown(referencia, unsafe_allow_html=True)
